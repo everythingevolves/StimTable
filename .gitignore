@@ -1,0 +1,14 @@
+# LaTeX outputs.
+*.aux
+*.log
+*.toc
+*.ist
+*.lof
+*.glo
+*.out
+*.pdf
+*.doc
+*.docx
+
+# System files.
+.DS_Store
