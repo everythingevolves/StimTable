@@ -4,7 +4,7 @@ Created on Mon Apr 22 17:33:28 2019
 
 @author: danielm
 """
-import os, warnings
+import os, sys, warnings
 import numpy as np
 import pandas as pd
 
@@ -537,19 +537,25 @@ def get_2p_vsync_line_label(dataset_obj):
     for label in dataset_obj.line_labels:
         if label.find('2p')>-1 and label.find('vsync')>-1:
             return label
+    warnings.warn('2p vsync line not found!', RuntimeWarning)
+    sys.exit()
   
 def get_stim_vsync_line_label(dataset_obj):
     
     for label in dataset_obj.line_labels:
         if label.find('stim')>-1 and label.find('vsync')>-1:
             return label      
-  
+    warnings.warn('stim vsync line not found!', RuntimeWarning)
+    sys.exit()
+
 def get_photodiode_line_label(dataset_obj):
     
     for label in dataset_obj.line_labels:
         if label.find('photodiode')>-1:
             return label
-      
+    warnings.warn('photodiode line not found!', RuntimeWarning)
+    sys.exit()
+  
 if __name__=='__main__':  
     exptpath = '/Users/danielm/Desktop/py_code/StimTable/sample_sessions/session_C/'
     three_session_C_tables(exptpath)
