@@ -19,7 +19,7 @@ def three_session_A_tables(exptpath):
     stim_table['drifting_gratings'] = drifting_gratings_table(data, twop_frames)
     stim_table['natural_movie_1'] = natural_movie_1_table(data,twop_frames)
     stim_table['natural_movie_3'] = natural_movie_3_table(data,twop_frames)
-    stim_table['spontaneous'] = get_spontaneous_stim_table(data,twop_frames)
+    stim_table['spontaneous'] = get_spontaneous_table(data,twop_frames)
     
     return stim_table
 
@@ -32,7 +32,7 @@ def three_session_B_tables(exptpath):
     stim_table['static_gratings'] = static_gratings_table(data, twop_frames)
     stim_table['natural_images'] = natural_images_table(data,twop_frames)
     stim_table['natural_movie_1'] = natural_movie_1_table(data,twop_frames)
-    stim_table['spontaneous'] = get_spontaneous_stim_table(data,twop_frames)
+    stim_table['spontaneous'] = get_spontaneous_table(data,twop_frames)
     
     return stim_table
 
@@ -46,7 +46,7 @@ def three_session_C_tables(exptpath):
     stim_table['locally_sparse_noise_8deg'] = locally_sparse_noise_8deg_table(data, twop_frames)
     stim_table['natural_movie_1'] = natural_movie_1_table(data,twop_frames)
     stim_table['natural_movie_2'] = natural_movie_2_table(data,twop_frames)
-    stim_table['spontaneous'] = get_spontaneous_stim_table(data,twop_frames)
+    stim_table['spontaneous'] = get_spontaneous_table(data,twop_frames)
     
     return stim_table
 
@@ -194,7 +194,7 @@ def locally_sparse_noise_table(data,twop_frames):
 
     return stim_table
 
-def get_spontaneous_stim_table(data,twop_frames):
+def get_spontaneous_table(data,twop_frames):
     
     MAX_SWEEPS = 50000
     MIN_DURATION = 2000
