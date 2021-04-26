@@ -12,3 +12,6 @@
 
 # System files.
 .DS_Store
+
+# Python package files
+*.egg-info
