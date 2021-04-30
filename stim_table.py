@@ -7,8 +7,11 @@ Created on Mon Apr 22 17:33:28 2019
 import os, sys, warnings
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 
 from sync_py3 import Dataset
+
+package_path = '/Users/danielm/Desktop/py_code/StimTable/'
 
 def three_session_A_tables(exptpath):
     
@@ -50,6 +53,94 @@ def three_session_C_tables(exptpath):
     
     return stim_table
 
+def omFish_gratings_tables(exptpath,verbose=False):
+    
+    data = load_stim(exptpath)
+    twop_frames, twop_vsync_fall, stim_vsync_fall, photodiode_rise = load_sync(exptpath)
+
+    stim_table = {}  
+    stim_table['drifting_gratings_contrast'] = drifting_gratings_table(data,twop_frames,stim_name='drifting_gratings_contrast')
+    stim_table['drifting_gratings_TF'] = drifting_gratings_table(data,twop_frames,stim_name='drifting_gratings_TF')
+    
+    if verbose:
+        count_sweeps_per_condition(stim_table['drifting_gratings_contrast'])
+        count_sweeps_per_condition(stim_table['drifting_gratings_TF'])
+    
+    return stim_table
+
+def SizeByContrast_tables(exptpath,verbose=False):
+    
+    data = load_stim(exptpath)
+    #twop_frames, twop_vsync_fall, stim_vsync_fall, photodiode_rise = load_sync(exptpath)
+
+    print_all_stim_types(data)
+
+    stim_table = {}  
+    stim_table['size_by_contrast'] = drifting_gratings_table(data,np.zeros((300000,)),stim_name='size_by_contrast')
+    stim_table['visual_behavior_flashes'] = visual_behavior_flashes_table(data,np.zeros((300000,)))
+    
+    if verbose:
+        count_sweeps_per_condition(stim_table['size_by_contrast'],columns=['SF','TF','Ori','Contrast','Size'])
+        print(stim_table['size_by_contrast'])
+        print(stim_table['visual_behavior_flashes'])
+    
+    return stim_table
+
+def count_sweeps_per_condition(stim_table,columns=['SF','TF','Ori','Contrast']):
+
+    num_sweeps = len(stim_table)    
+
+    params = get_params(stim_table,columns)
+        
+    for combination in range(num_combinations(params)):
+        
+        combination_params = condition_combination_to_params(params,combination)
+        
+        print(combination_params)
+        
+        rows_in_condition = np.ones((num_sweeps,),dtype=np.bool)
+        for i_col,column in enumerate(columns):
+            rows_in_condition = rows_in_condition & (stim_table[column].values==combination_params[column])
+            
+        print(sum(rows_in_condition))
+    print('Num blank sweeps: '+str(np.sum(stim_table['Ori'].isnull().values)))
+
+def get_params(stim_table,columns):
+    params = {}
+    for c in columns:
+        column_params = np.unique(stim_table[c].values)
+        params[c] = column_params[np.isfinite(column_params)]
+    return params
+
+def num_combinations(params):
+    num_combinations = 1
+    for i_col,column in enumerate(list(params.keys())):
+        num_combinations *= len(params[column])
+    return num_combinations
+
+def condition_combination_to_params(params,combination):
+    
+    columns = list(params.keys())
+    
+    combination_params = {}
+    
+    for i_col,column in enumerate(columns):
+        
+        divisor = 1
+        columns_to_right = np.arange(i_col+1,len(columns))
+        for j_col in columns_to_right:
+            divisor *= len(params[columns[j_col]])
+            
+        modulo = num_combinations(params)
+        columns_to_left = np.arange(0,i_col)
+        for j_col in columns_to_left:
+            modulo /= len(params[columns[j_col]])
+        
+        param_index = (int(combination) % int(modulo)) / int(divisor)
+        combination_params[column] = params[column][int(param_index)]
+    
+    return combination_params
+
 def coarse_mapping_create_stim_tables(exptpath):
     
     data = load_stim(exptpath)
@@ -72,19 +163,111 @@ def lsnCS_create_stim_tables(exptpath):
     
     return stim_table
 
-def drifting_gratings_table(data,twop_frames):
+def MovieClips_tables(exptpath,num_train_segments=5,num_test_segments=10,verbose=False):
     
-    DG_idx = get_stimulus_index(data,'drifting_grating')
+    data = load_stim(exptpath)
+    twop_frames, twop_vsync_fall, stim_vsync_fall, photodiode_rise = load_sync(exptpath)
+    train_info = pd.read_pickle(package_path+'clip_info_train.pkl')
+    test_info = pd.read_pickle(package_path+'clip_info_test.pkl')
+    
+    stim_table = {}
+    for train_segment in range(num_train_segments):
+        segment_name = 'clips_train_' + str(1+train_segment)
+        stim_table[segment_name] = MovieClips_one_segment_table(data,twop_frames,segment_name,train_info)
+        
+    for test_segment in range(num_test_segments):
+        segment_name = 'clips_test_' + str(1+test_segment) 
+        stim_table[segment_name] = MovieClips_one_segment_table(data,twop_frames,segment_name,test_info)
+    
+    if verbose:
+        print(stim_table)
+    
+    return stim_table
+
+def MovieClips_one_segment_table(data,twop_frames,segment_name,info_df):
+    
+    segment_idx = get_stimulus_index(data,segment_name)
+    stim_name = get_stim_name_for_segment(segment_name)
+
+    is_stim = np.argwhere((info_df['stim_name'] == stim_name).values)[:,0]
+    #clip_start_frames = info_df['start_frame'].values[is_stim]
+    clip_end_frames = info_df['end_frame'].values[is_stim]
+    num_clips = len(is_stim)
+    
+    timing_table = get_sweep_frames(data,segment_idx)
+    num_segment_frames = len(timing_table)
+
+    stim_table = init_table(twop_frames,timing_table)
+    stim_table['stim_name'] = stim_name
+
+    clip_number = -1 * np.ones((num_segment_frames,))
+    frame_in_clip = -1 * np.ones((num_segment_frames,))
+    curr_clip = 0
+    curr_frame = 0
+    for nf in range(num_segment_frames):
+        if nf == clip_end_frames[curr_clip]:
+            curr_clip += 1
+            curr_frame = 0
+            if curr_clip==num_clips:
+                break
+            
+        clip_number[nf] = curr_clip
+        frame_in_clip[nf] = curr_frame
+        curr_frame += 1
+            
+    stim_table['clip_number'] = clip_number
+    stim_table['frame_in_clip'] = frame_in_clip
+
+    return stim_table
+
+def get_stim_name_for_segment(segment_name):
+    
+    names = {'clips_train_1': 'PEsacc640_001_train',
+             'clips_train_2': 'trn001lf_train',
+             'clips_train_3': 'cont640_030lf_train',
+             'clips_train_4': 'segmented_train',
+             'clips_train_5': 'cont640_031lf_train',
+             'clips_test_1': 'ds_warped_cont640_002lf_rep_test_0',
+             'clips_test_2': 'ds_warped_segmented_test_0',
+             'clips_test_3': 'ds_warped_cont640_002lf_rep_test_1',
+             'clips_test_4': 'ds_warped_segmented_test_1',
+             'clips_test_5': 'ds_warped_cont640_002lf_rep_test_2',
+             'clips_test_6': 'ds_warped_segmented_test_2',
+             'clips_test_7': 'ds_warped_cont640_002lf_rep_test_3',
+             'clips_test_8': 'ds_warped_segmented_test_3',
+             'clips_test_9': 'ds_warped_cont640_002lf_rep_test_4',
+             'clips_test_10': 'ds_warped_segmented_test_4'
+            }
+    
+    return names[segment_name]
+
+def visual_behavior_flashes_table(data,twop_frames):
+    
+    stim_idx = get_stimulus_index(data,'visual_behavior_flashes')
+
+    print_all_stim_attributes(data, stim_idx)
+    
+    timing_table = get_sweep_frames(data,stim_idx)
+    
+    stim_table = init_table(twop_frames,timing_table)
+    stim_table['Image'] = data['stimuli'][stim_idx]['sweep_order'][:len(stim_table)]
+    
+    return stim_table
+
+def drifting_gratings_table(data,twop_frames,stim_name='drifting_grating'):
+    
+    DG_idx = get_stimulus_index(data,stim_name)
     
     timing_table = get_sweep_frames(data,DG_idx)
 
     stim_table = init_table(twop_frames,timing_table)
     
-    stim_attributes = ['TF',
-                       'SF',
-                       'Contrast',
-                       'Ori'
-                       ]
+    stim_attributes = data['stimuli'][DG_idx]['dimnames']
+                       #  ['TF',
+                       # 'SF',
+                       # 'Contrast',
+                       # 'Ori'
+                       # ]
     
     for stim_attribute in stim_attributes:
         stim_table[stim_attribute] = get_attribute_by_sweep(data, DG_idx, stim_attribute)[:len(stim_table)]
@@ -347,9 +530,10 @@ def get_attribute_by_sweep(data, stimulus_idx, attribute):
         sweeps_with_condition = np.argwhere(sweep_order == condition)[:, 0]
 
         if condition > -1:  # blank sweep is -1
-            attribute_by_sweep[sweeps_with_condition] = sweep_table[condition][
-                attribute_idx
-            ]
+            if attribute.find('Size')!=-1:
+                attribute_by_sweep[sweeps_with_condition] = sweep_table[condition][attribute_idx][0]
+            else:
+                attribute_by_sweep[sweeps_with_condition] = sweep_table[condition][attribute_idx]
 
     return attribute_by_sweep
     
@@ -466,10 +650,24 @@ def load_sync(exptpath, verbose=True):
     for chan in list(channels.keys()):
         # Check that signal is high at least once in each channel.
         channel_test.append(any(channels[chan]))
+        if not any(channels[chan]):
+            print(chan+' is empty!')
     if not all(channel_test):
         raise RuntimeError('Not all channels present. Sync test failed.')
     elif verbose:
         print("All channels present.")
+
+    # print(photodiode_rise)
+    ptd_rise_diff = np.ediff1d(photodiode_rise)
+    
+    # plt.figure()
+    # plt.plot(photodiode_rise,np.zeros((len(photodiode_rise),)),'o')
+    # #plt.xlim(0,100)
+    # plt.show()
+    
+    # plt.figure()
+    # plt.hist(ptd_rise_diff,range=[0,5])
+    # plt.show()
 
     # test and correct for photodiode transition errors
     ptd_rise_diff = np.ediff1d(photodiode_rise)
@@ -483,7 +681,15 @@ def load_sync(exptpath, verbose=True):
     for i in medium:
         if set(range(i - 2, i)) <= set(short):
             ptd_start = i + 1
-    ptd_end = np.where(photodiode_rise > stim_vsync_fall.max())[0][0] - 1
+            
+    if photodiode_rise.max() <= stim_vsync_fall.max():
+        print('photodiode ends before stim_vsync already.')
+        ptd_end = len(ptd_rise_diff)
+    else:
+        print('truncating photodiode to end before stim_vsync.')
+        ptd_end = np.where(photodiode_rise > stim_vsync_fall.max())[0][0] - 1
+    print('ptd_end: ' +str(ptd_end)+ ' max photodiode ' + str(photodiode_rise.max())+' max stim '+ str(stim_vsync_fall.max()))
+
 
     if ptd_start > 3 and verbose:
         print('ptd_start: ' + str(ptd_start))
@@ -557,5 +763,15 @@ def get_photodiode_line_label(dataset_obj):
     sys.exit()
   
 if __name__=='__main__':  
-    exptpath = '/Users/danielm/Desktop/py_code/StimTable/sample_sessions/session_C/'
-    three_session_C_tables(exptpath)
+    
+    #exptpath = '/Users/danielm/Desktop/py_code/StimTable/sample_sessions/session_A/'
+    #three_session_A_tables(exptpath)
+    
+    #exptpath = '/Users/danielm/Desktop/py_code/StimTable/sample_sessions/session_B/'
+    #three_session_B_tables(exptpath)
+    
+    #exptpath = '/Users/danielm/Desktop/py_code/StimTable/sample_sessions/session_C/'
+    #three_session_C_tables(exptpath)
+    
+    exptpath = '/Users/danielm/Desktop/py_code/StimTable/sample_sessions/MovieClips/'
+    MovieClips_tables(exptpath)
