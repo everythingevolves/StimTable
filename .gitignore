@@ -15,3 +15,7 @@
 
 # Python package files
 *.egg-info
+
+# Other python files
+*.pyc
+__pycache__
