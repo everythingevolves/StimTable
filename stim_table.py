@@ -720,6 +720,9 @@ def load_sync(exptpath, verbose=True):
         print("monitor delay: ", delay)
 
     # adjust stimulus time to incorporate monitor delay
+    if np.isnan(delay):
+        delay = 0.0351
+        warnings.warn(f'Monitor delay could not be computed and has been hard-coded to {delay}.')
     stim_time = stim_vsync_fall + delay
 
     # convert stimulus frames into twop frames
