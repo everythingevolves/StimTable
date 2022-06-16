@@ -53,6 +53,189 @@ def three_session_C_tables(exptpath):
     
     return stim_table
 
+def VisualBehavior_NM1_table(exptpath,session_ID,frames_per_rep=900,num_reps=10):
+    
+    data = pd.read_pickle(exptpath+str(session_ID)+'_stim.pkl')
+    twop_frames, stim_vsync_rise = load_sync_VB(exptpath+str(session_ID)+'_sync.h5')
+
+    #36000 stim frames (600 seconds?)
+    NM1_stim_frames = data['items']['behavior']['items']['fingerprint']['frame_indices']
+    frame_in_movie = data['items']['behavior']['items']['fingerprint']['static_stimulus']['frame_list']
+    
+    print(NM1_stim_frames)
+    print(len(stim_vsync_rise))
+    
+    start_frames = NM1_stim_frames
+    start_frames[start_frames>=len(stim_vsync_rise)] = len(stim_vsync_rise) - 1
+    
+    whole_block_start_times = stim_vsync_rise[start_frames]
+    
+    first_NM1_frame = np.argwhere(frame_in_movie==0)[0,0]
+    print('first frame: '+str(first_NM1_frame))
+    
+    start_time = np.zeros((num_reps*frames_per_rep,))
+    end_time = np.zeros((num_reps*frames_per_rep,))
+    NM1_frame_indices = np.zeros((num_reps*frames_per_rep,))
+    frame_start_idx = first_NM1_frame
+    for rep in range(num_reps):
+        for NM1_frame_number in range(frames_per_rep):
+            
+            row = int(rep*frames_per_rep + NM1_frame_number)
+            
+            start_time[row] = whole_block_start_times[frame_start_idx]
+            NM1_frame_indices[row] = NM1_frame_number
+            
+            next_frame_number = NM1_frame_number + 1
+            if NM1_frame_number==(frames_per_rep-1):
+                next_frame_number = 0
+            
+            #find range of stim frames during this NM1_frame presentation:
+            if rep==(num_reps-1) and next_frame_number==0:
+                median_frame_time = np.median(end_time - start_time)
+                end_time[row] = start_time[row] + median_frame_time
+            else:
+                next_frame_idx = frame_start_idx + np.argwhere(frame_in_movie[frame_start_idx:]==next_frame_number)[0,0]
+                end_time[row] = whole_block_start_times[next_frame_idx]
+                
+            frame_start_idx = next_frame_idx
+    
+    NM1_table = pd.DataFrame(np.column_stack((start_time,end_time,NM1_frame_indices)), columns=('Start_Time','End_Time','Frame'))
+    
+    return NM1_table
+
+def load_sync_VB(syncpath,verbose=False,LONG_STIM_THRESH=0.2):
+    
+    d = Dataset(syncpath)
+    
+    if verbose:
+        print(d.line_labels)
+        
+    vsync_2p_label = get_2p_vsync_line_label(d)
+    vsync_stim_label = get_stim_vsync_line_label(d)
+    photodiode_label = get_photodiode_line_label(d)
+
+    # set the appropriate sample frequency
+    sample_freq = d.meta_data['ni_daq']['counter_output_freq']
+
+    # get sync timing for each channel
+    twop_vsync_fall = d.get_falling_edges(vsync_2p_label) / sample_freq
+    stim_vsync_fall = (
+        d.get_falling_edges(vsync_stim_label)[1:] / sample_freq
+    )  # eliminating the DAQ pulse
+    photodiode_rise = d.get_rising_edges(photodiode_label) / sample_freq
+
+    ptd_rise_diff = np.ediff1d(photodiode_rise)
+    
+    stim_vsync_rise = d.get_rising_edges(vsync_stim_label) / sample_freq
+    if (stim_vsync_rise[1] - stim_vsync_rise[0]) > LONG_STIM_THRESH:
+        stim_vsync_rise = stim_vsync_rise[1:]
+    
+    if verbose:
+        plt.figure()
+        plt.plot(photodiode_rise,np.zeros((len(photodiode_rise),)),'o')
+        #plt.xlim(0,100)
+        plt.show()
+        
+        plt.figure()
+        plt.hist(ptd_rise_diff,range=[0,5])
+        plt.show()
+
+    # make sure all of the sync data are available
+    channels = {
+        'twop_vsync_fall': twop_vsync_fall,
+        'stim_vsync_fall': stim_vsync_fall,
+        'photodiode_rise': photodiode_rise,
+    }
+    channel_test = []
+    for chan in list(channels.keys()):
+        # Check that signal is high at least once in each channel.
+        channel_test.append(any(channels[chan]))
+        if not any(channels[chan]):
+            print(chan+' is empty!')
+    # if not all(channel_test):
+    #     raise RuntimeError('Not all channels present. Sync test failed.')
+    # elif verbose:
+    #     print("All channels present.")
+
+    # print(photodiode_rise)
+    
+    print('Num 2P vsync_falls: '+str(len(twop_vsync_fall)))
+    print('Num photodiode_rises: '+str(len(photodiode_rise)))
+    print('Num stimulus vsync_falls: '+str(len(stim_vsync_fall)))
+    
+    
+    if channel_test[2]:
+        
+        # test and correct for photodiode transition errors
+        ptd_rise_diff = np.ediff1d(photodiode_rise)
+        short = np.where(np.logical_and(ptd_rise_diff > 0.1, ptd_rise_diff < 0.3))[
+            0
+        ]
+        medium = np.where(np.logical_and(ptd_rise_diff > 0.5, ptd_rise_diff < 1.5))[
+            0
+        ]
+        ptd_start = 3
+        for i in medium:
+            if set(range(i - 2, i)) <= set(short):
+                ptd_start = i + 1
+                
+        if photodiode_rise.max() <= stim_vsync_fall.max():
+            print('photodiode ends before stim_vsync already.')
+            ptd_end = len(ptd_rise_diff)
+        else:
+            print('truncating photodiode to end before stim_vsync.')
+            ptd_end = np.where(photodiode_rise > stim_vsync_fall.max())[0][0] - 1
+        print('ptd_end: ' +str(ptd_end)+ ' max photodiode ' + str(photodiode_rise.max())+' max stim '+ str(stim_vsync_fall.max()))
+    
+    
+        if ptd_start > 3 and verbose:
+            print('ptd_start: ' + str(ptd_start))
+            print("Photodiode events before stimulus start.  Deleted.")
+    
+        ptd_errors = []
+        while any(ptd_rise_diff[ptd_start:ptd_end] < 1.8):
+            error_frames = (
+                np.where(ptd_rise_diff[ptd_start:ptd_end] < 1.8)[0] + ptd_start
+            )
+            print("Photodiode error detected. Number of frames:", len(error_frames))
+            photodiode_rise = np.delete(photodiode_rise, error_frames[-1])
+            ptd_errors.append(photodiode_rise[error_frames[-1]])
+            ptd_end -= 1
+            ptd_rise_diff = np.ediff1d(photodiode_rise)
+    
+        first_pulse = ptd_start
+        stim_on_photodiode_idx = 60 + 120 * np.arange(0, ptd_end - ptd_start, 1)
+    
+        stim_on_photodiode = stim_vsync_fall[stim_on_photodiode_idx]
+        photodiode_on = photodiode_rise[
+            first_pulse + np.arange(0, ptd_end - ptd_start, 1)
+        ]
+        delay_rise = photodiode_on - stim_on_photodiode
+    
+        delay = np.mean(delay_rise[:-1])
+        print("monitor delay: ", delay)
+    else:
+        delay = 0.01
+
+    # adjust stimulus time to incorporate monitor delay
+    stim_time = stim_vsync_fall + delay
+
+    # convert stimulus frames into twop frames
+    twop_frames = np.empty((len(stim_time), 1))
+    for i in range(len(stim_time)):
+        # crossings = np.nonzero(np.ediff1d(np.sign(twop_vsync_fall - stim_time[i]))>0)
+        crossings = (
+            np.searchsorted(twop_vsync_fall, stim_time[i], side='left') - 1
+        )
+        if crossings < (len(twop_vsync_fall) - 1):
+            twop_frames[i] = crossings
+        else:
+            twop_frames[i : len(stim_time)] = np.NaN
+            warnings.warn('Acquisition ends before stimulus.', RuntimeWarning)
+            break
+
+    return twop_frames, (stim_vsync_rise+delay)
+
 def omFish_gratings_tables(exptpath,verbose=False):
     
     data = load_stim(exptpath)
@@ -68,16 +251,27 @@ def omFish_gratings_tables(exptpath,verbose=False):
     
     return stim_table
 
+def SparseNoise_tables(exptpath):
+    
+    data = load_stim(exptpath)
+    twop_frames, twop_vsync_fall, stim_vsync_fall, photodiode_rise = load_sync(exptpath)
+    
+    stim_table = {}
+    stim_table['sparse_noise'] = sparse_noise_table(data, twop_frames)
+    stim_table['spontaneous'] = get_spontaneous_table(data,twop_frames)
+    
+    return stim_table
+
 def SizeByContrast_tables(exptpath,verbose=False):
     
     data = load_stim(exptpath)
-    #twop_frames, twop_vsync_fall, stim_vsync_fall, photodiode_rise = load_sync(exptpath)
+    twop_frames, twop_vsync_fall, stim_vsync_fall, photodiode_rise = load_sync(exptpath)
 
     print_all_stim_types(data)
 
     stim_table = {}  
-    stim_table['size_by_contrast'] = drifting_gratings_table(data,np.zeros((300000,)),stim_name='size_by_contrast')
-    stim_table['visual_behavior_flashes'] = visual_behavior_flashes_table(data,np.zeros((300000,)))
+    stim_table['size_by_contrast'] = drifting_gratings_table(data,twop_frames,stim_name='size_by_contrast')
+    stim_table['visual_behavior_flashes'] = visual_behavior_flashes_table(data,twop_frames)
     
     if verbose:
         count_sweeps_per_condition(stim_table['size_by_contrast'],columns=['SF','TF','Ori','Contrast','Size'])
@@ -365,6 +559,18 @@ def locally_sparse_noise_8deg_table(data,twop_frames):
 
     return stim_table
 
+def sparse_noise_table(data,twop_frames):
+    
+    lsn_idx = get_stimulus_index(data,'sparse_noise')
+    
+    timing_table = get_sweep_frames(data,lsn_idx)
+
+    stim_table = init_table(twop_frames,timing_table)
+    
+    stim_table['Frame'] = np.array(data['stimuli'][lsn_idx]['sweep_order'][:len(stim_table)])
+
+    return stim_table
+
 def locally_sparse_noise_table(data,twop_frames):
     
     lsn_idx = get_stimulus_index(data,'locally_sparse_noise')
@@ -605,7 +811,7 @@ def load_stim(exptpath, verbose=True):
         )
 
     return pd.read_pickle(pklpath)
-  
+    
 def load_sync(exptpath, verbose=True):
 
     # verify that sync file exists in exptpath
@@ -640,6 +846,17 @@ def load_sync(exptpath, verbose=True):
     )  # eliminating the DAQ pulse
     photodiode_rise = d.get_rising_edges(photodiode_label) / sample_freq
 
+    ptd_rise_diff = np.ediff1d(photodiode_rise)
+    
+    plt.figure()
+    plt.plot(photodiode_rise,np.zeros((len(photodiode_rise),)),'o')
+    #plt.xlim(0,100)
+    plt.show()
+    
+    plt.figure()
+    plt.hist(ptd_rise_diff,range=[0,5])
+    plt.show()
+
     # make sure all of the sync data are available
     channels = {
         'twop_vsync_fall': twop_vsync_fall,
@@ -658,17 +875,11 @@ def load_sync(exptpath, verbose=True):
         print("All channels present.")
 
     # print(photodiode_rise)
-    ptd_rise_diff = np.ediff1d(photodiode_rise)
     
-    # plt.figure()
-    # plt.plot(photodiode_rise,np.zeros((len(photodiode_rise),)),'o')
-    # #plt.xlim(0,100)
-    # plt.show()
+    print('Num 2P vsync_falls: '+str(len(twop_vsync_fall)))
+    print('Num photodiode_rises: '+str(len(photodiode_rise)))
+    print('Num stimulus vsync_falls: '+str(len(stim_vsync_fall)))
     
-    # plt.figure()
-    # plt.hist(ptd_rise_diff,range=[0,5])
-    # plt.show()
-
     # test and correct for photodiode transition errors
     ptd_rise_diff = np.ediff1d(photodiode_rise)
     short = np.where(np.logical_and(ptd_rise_diff > 0.1, ptd_rise_diff < 0.3))[
@@ -773,5 +984,22 @@ if __name__=='__main__':
     #exptpath = '/Users/danielm/Desktop/py_code/StimTable/sample_sessions/session_C/'
     #three_session_C_tables(exptpath)
     
-    exptpath = '/Users/danielm/Desktop/py_code/StimTable/sample_sessions/MovieClips/'
-    MovieClips_tables(exptpath)
+     #exptpath = '/Users/danielm/Desktop/py_code/StimTable/sample_sessions/MovieClips/'
+     #MovieClips_tables(exptpath,verbose=True)
+    
+     #exptpath = '/Users/danielm/Desktop/stim_sessions/SizeByContrast_day1to9/'
+     #SizeByContrast_tables(exptpath)
+     
+     # exptpath = '/Users/danielm/Desktop/stim_sessions/Deepscope_test_3/'
+     # omFish_gratings_tables(exptpath,verbose=True)
+     
+     # exptpath = '/Users/danielm/Desktop/stim_sessions/Deepscope_day1_1143565396/'
+     # st = SizeByContrast_tables(exptpath)
+     
+     exptpath = '/Volumes/Extreme Pro/visual_behavior/'
+     session_ID = 792619807
+     st = VisualBehavior_NM1_table(exptpath,session_ID)
+     print(st)
+     
+     #exptpath = '/Users/danielm/Desktop/stim_sessions/Deepscope_day0_test_2/'
+     #SparseNoise_tables(exptpath)
